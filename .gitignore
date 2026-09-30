@@ -1,0 +1,16 @@
+# System
+Thumbs.db
+Desktop.ini
+
+# Edytory
+.vscode/
+.idea/
+*.swp
+*~
+
+# macOS
+.DS_Store
+
+# Node (na wypadek lokalnego serwerka)
+node_modules/
+npm-debug.log*

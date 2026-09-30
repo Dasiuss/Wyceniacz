@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wyceniacz</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <header class="topbar">
+    <h1>Wyceniacz <span class="unit">MD</span></h1>
+    <div class="statusline">
+      <span id="state-pill" class="pill">Łączenie…</span>
+      <span id="online-pill" class="pill">Online: –</span>
+    </div>
+  </header>
+
+  <div id="fatal" class="fatal" hidden></div>
+
+  <main>
+    <div id="sections" class="sections"></div>
+
+    <section class="panel">
+      <div class="panel-block">
+        <label class="panel-label" for="jira">Link do ticketu w Jirze</label>
+        <div class="link-row">
+          <input id="jira" type="url" spellcheck="false"
+                 placeholder="https://twoja-firma.atlassian.net/browse/ABC-123">
+          <button id="go" type="button" class="btn">Przejdź do linku</button>
+        </div>
+      </div>
+
+      <div class="panel-block controls">
+        <div class="buttons">
+          <button id="reveal" type="button" class="btn primary">Odkryj</button>
+          <button id="reset" type="button" class="btn danger">Resetuj</button>
+        </div>
+        <div class="sum">
+          <span class="sum-label">Suma (BE + FE + Testy)</span>
+          <span id="sum" class="sum-value">–</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="history">
+      <h2>Historia</h2>
+      <div id="history"></div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
