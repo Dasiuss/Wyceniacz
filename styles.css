@@ -257,11 +257,12 @@ main {
   min-height: 46px;
   padding: 10px 8px;
   border-radius: 9px;
-  border: 1px dashed var(--line-strong);
+  border: 1px solid var(--line-strong);
   background: var(--surface-soft);
   color: var(--text);
   text-align: center;
-  transition: border-color 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease, background 0.12s ease,
+              color 0.12s ease;
   -moz-appearance: textfield;
   appearance: textfield;
 }
@@ -278,16 +279,32 @@ main {
 
 .val-input:focus {
   outline: none;
-  border-style: solid;
   border-color: var(--sec);
   background: var(--surface);
   box-shadow: var(--focus-ring);
 }
 
-.val-input:disabled {
+/* Wlasna wartosc jest wybrana - pole wyglada jak zaznaczony przycisk. */
+.val-input.active {
+  border-color: var(--sec);
+  background: var(--sec-soft);
+  color: var(--sec);
+  font-weight: 700;
+  box-shadow: inset 0 0 0 1px var(--sec);
+}
+
+.val-input.active:focus {
+  background: var(--sec-soft);
+  box-shadow: inset 0 0 0 1px var(--sec), var(--focus-ring);
+}
+
+.val-input:disabled,
+.val-input.active:disabled {
   color: var(--muted);
   background: var(--surface-soft);
   border-color: var(--line);
+  font-weight: 400;
+  box-shadow: none;
   cursor: not-allowed;
 }
 

@@ -224,12 +224,18 @@ function buildUI() {
       const value = Number(raw.replace(',', '.'));
       if (!Number.isFinite(value) || value < MIN_VALUE || value > MAX_VALUE) {
         errEl.textContent = `Zakres: ${fmt(MIN_VALUE)}–${fmt(MAX_VALUE)} MD`;
+        input.classList.remove('active');
         return;
       }
 
       errEl.textContent = '';
       castVote(s.key, round2(value), false);
     };
+
+    // Zaznaczamy pole od razu przy pierwszym znaku, nie dopiero po opuszczeniu.
+    input.addEventListener('input', () => {
+      input.classList.toggle('active', input.value.trim() !== '');
+    });
 
     input.addEventListener('change', commit);
     input.addEventListener('keydown', (e) => {
@@ -296,9 +302,18 @@ function renderSections() {
       b.title = isMine ? 'Kliknij ponownie, aby cofnąć głos' : '';
     }
 
+    // Wlasna wartosc zaznaczamy tak samo wyraznie, jak zaznaczony przycisk.
+    const mineIsCustom = mineValue !== null && !mineIsPreset;
+    const pisze = document.activeElement === r.input;
+
     r.input.disabled = !canVote;
-    if (document.activeElement !== r.input) {
-      r.input.value = mineValue !== null && !mineIsPreset ? fmt(mineValue) : '';
+    r.input.title = mineIsCustom ? 'Wyczyść pole, aby cofnąć głos' : '';
+
+    // Podczas pisania polem rzadzi zdarzenie "input" - inaczej przerysowanie
+    // gasiłoby podświetlenie w połowie wpisywania.
+    if (!pisze) {
+      r.input.classList.toggle('active', mineIsCustom);
+      r.input.value = mineIsCustom ? fmt(mineValue) : '';
     }
 
     if (revealed) {
