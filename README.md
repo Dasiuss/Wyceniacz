@@ -16,8 +16,9 @@ Komputer-first, vanilla JS, bez builda. Stan trzyma Supabase (Postgres + Realtim
 - **Odkryj** (może kliknąć każdy) pokazuje listę głosów, średnie i sumę. Głosowanie do
   historii trafia tylko wtedy, gdy ma co najmniej jeden głos.
 - **Resetuj** (może kliknąć każdy) czyści bieżące głosy i link, i startuje nowe głosowanie.
-  Wymaga podwójnego potwierdzenia: pierwszy klik zmienia napis na „Potwierdź reset".
-  Reset bez wcześniejszego odkrycia nie zapisuje niczego do historii.
+  **Potwierdzenia wymaga tylko przed odkryciem** — wtedy głosy przepadają bez śladu, więc
+  pierwszy klik zmienia napis na „Potwierdź reset". Po odkryciu głosowanie jest już
+  zapisane w historii, więc reset działa od razu.
 - **Link do Jiry** jest edytowalny zawsze; historia zapamiętuje go razem z głosowaniem.
   Przycisk obok otwiera go w nowej karcie.
 - **Cofnąć głos** można klikając drugi raz we własny, aktywny przycisk.

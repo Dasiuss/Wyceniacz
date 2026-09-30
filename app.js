@@ -334,6 +334,9 @@ function renderPanel() {
 
   resetBtn.textContent = resetArmed ? RESET_CONFIRM_LABEL : RESET_LABEL;
   resetBtn.classList.toggle('armed', resetArmed);
+  resetBtn.title = revealed
+    ? 'Rozpocznij nowe głosowanie — to jest już zapisane w historii'
+    : 'Wyczyść głosy i zacznij od nowa (wymaga potwierdzenia)';
 
   sumEl.textContent = revealed ? `${fmt(totalSum(state.votes))} MD` : '–';
 
@@ -610,12 +613,19 @@ revealBtn.addEventListener('click', async () => {
 });
 
 resetBtn.addEventListener('click', async () => {
-  if (!resetArmed) {
+  const revealed = Boolean(state.voting) && state.voting.status === 'revealed';
+
+  // Potwierdzenie ma sens tylko przed odkryciem - wtedy reset kasuje glosy bez
+  // sladu. Po odkryciu glosowanie jest juz w historii, wiec reset jest natychmiastowy.
+  if (revealed) {
+    if (resetArmed) disarmReset();
+  } else if (!resetArmed) {
     armReset();
     return;
+  } else {
+    disarmReset();
   }
 
-  disarmReset();
   resetBtn.disabled = true;
 
   try {
