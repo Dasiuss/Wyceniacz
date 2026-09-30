@@ -11,10 +11,11 @@ const SECTIONS = [
   { key: 'qa', label: 'Testy' },
 ];
 
-// Przyciski: 0.5-4 co 0.5, potem 5 i 6. Pozostale wartosci przez pole tekstowe.
-const PRESET_VALUES = [0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6];
+// Przyciski ulozone po dwa w rzedzie: (1, 1.5) (2, 2.5) (3, 3.5) (4, 5) i na koncu
+// (6, pole na wlasna wartosc). Pozostale wartosci wpisuje sie recznie.
+const PRESET_VALUES = [1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6];
 
-const MIN_VALUE = 0.5;
+const MIN_VALUE = 1;
 const MAX_VALUE = 15;
 
 const VOTER_STORAGE_KEY = 'wyceniacz.voterId';
@@ -47,6 +48,19 @@ const fmt = (n) => {
 const ceilHalf = (n) => Math.ceil(n * 2 - 1e-9) / 2;
 const round2 = (n) => Math.round(n * 100) / 100;
 const msg = (e) => (e && e.message ? e.message : String(e));
+
+const isPreset = (value) => PRESET_VALUES.some((p) => Math.abs(p - value) < 1e-9);
+
+// Polska odmiana: 1 glos, 2-4 glosy, 5+ glosow (a takze 22 glosy, ale 12 glosow).
+function votesLabel(n) {
+  if (n === 1) return '1 głos';
+
+  const jednosci = n % 10;
+  const nastki = n % 100;
+  const kilka = jednosci >= 2 && jednosci <= 4 && (nastki < 12 || nastki > 14);
+
+  return kilka ? `${n} głosy` : `${n} głosów`;
+}
 
 function safeUrl(raw) {
   if (!raw) return null;
@@ -95,6 +109,10 @@ function sectionStats(votes, section) {
 // Sekcja bez glosow liczy sie jako 0.
 function totalSum(votes) {
   return SECTIONS.reduce((acc, s) => acc + (sectionStats(votes, s.key).avg ?? 0), 0);
+}
+
+function myVote(section) {
+  return state.votes.find((v) => v.section === section && v.voter_id === voterId) || null;
 }
 
 function ticketLabel(raw) {
@@ -174,29 +192,32 @@ function buildUI() {
       valuesEl.appendChild(b);
       buttons.push(b);
     }
-    col.appendChild(valuesEl);
-
-    const custom = document.createElement('div');
-    custom.className = 'custom';
 
     const input = document.createElement('input');
     input.type = 'number';
+    input.className = 'val-input';
     input.min = String(MIN_VALUE);
     input.max = String(MAX_VALUE);
     input.step = 'any';
     input.inputMode = 'decimal';
-    input.placeholder = 'inna wartość';
+    input.placeholder = 'inna';
     input.setAttribute('aria-label', `Inna wartość dla sekcji ${s.label}`);
-    custom.appendChild(input);
+    valuesEl.appendChild(input);
+
+    col.appendChild(valuesEl);
 
     const errEl = document.createElement('span');
     errEl.className = 'err';
-    custom.appendChild(errEl);
+    col.appendChild(errEl);
 
     const commit = () => {
       const raw = input.value.trim();
+
+      // Wyczyszczenie pola cofa glos wpisany recznie.
       if (raw === '') {
         errEl.textContent = '';
+        const mine = myVote(s.key);
+        if (mine && !isPreset(Number(mine.value))) withdrawVote(s.key);
         return;
       }
 
@@ -218,8 +239,6 @@ function buildUI() {
         input.blur();
       }
     });
-
-    col.appendChild(custom);
 
     const result = document.createElement('div');
     result.className = 'result';
@@ -265,15 +284,16 @@ function renderSections() {
     const r = refs[s.key];
     const stats = sectionStats(state.votes, s.key);
 
-    const mine = state.votes.find((v) => v.section === s.key && v.voter_id === voterId);
+    const mine = myVote(s.key);
     const mineValue = mine ? Number(mine.value) : null;
-    const mineIsPreset = mineValue !== null
-      && PRESET_VALUES.some((v) => Math.abs(v - mineValue) < 1e-9);
+    const mineIsPreset = mineValue !== null && isPreset(mineValue);
 
     for (const b of r.buttons) {
       const v = Number(b.dataset.value);
-      b.classList.toggle('active', mineValue !== null && Math.abs(v - mineValue) < 1e-9);
+      const isMine = mineValue !== null && Math.abs(v - mineValue) < 1e-9;
+      b.classList.toggle('active', isMine);
       b.disabled = !canVote;
+      b.title = isMine ? 'Kliknij ponownie, aby cofnąć głos' : '';
     }
 
     r.input.disabled = !canVote;
@@ -289,7 +309,7 @@ function renderSections() {
       r.avgValue.textContent = stats.avg === null ? '–' : `${fmt(stats.avg)} MD`;
       r.avgOut.classList.add('on');
     } else {
-      r.votesOut.textContent = `Zagłosowano: ${stats.count}`;
+      r.votesOut.textContent = votesLabel(stats.count);
       r.votesOut.classList.remove('revealed');
 
       r.avgLabel.textContent = '';
@@ -470,6 +490,13 @@ async function castVote(section, value, fromButton) {
     return;
   }
 
+  // Klikniecie w swoj wlasny, aktywny przycisk cofa glos.
+  const mine = myVote(section);
+  if (mine && Math.abs(Number(mine.value) - value) < 1e-9) {
+    await withdrawVote(section);
+    return;
+  }
+
   try {
     const { error } = await supabase.rpc('submit_vote', {
       p_voter_id: voterId,
@@ -489,6 +516,29 @@ async function castVote(section, value, fromButton) {
     await refreshCurrent();
   } catch (e) {
     toast(`Nie udało się zapisać głosu: ${msg(e)}`);
+    await refreshCurrent().catch(() => {});
+  }
+}
+
+async function withdrawVote(section) {
+  if (!state.voting || state.voting.status !== 'open') return;
+
+  try {
+    const { error } = await supabase.rpc('withdraw_vote', {
+      p_voter_id: voterId,
+      p_section: section,
+    });
+    if (error) throw error;
+
+    const r = refs[section];
+    if (r) {
+      r.errEl.textContent = '';
+      if (document.activeElement !== r.input) r.input.value = '';
+    }
+
+    await refreshCurrent();
+  } catch (e) {
+    toast(`Nie udało się cofnąć głosu: ${msg(e)}`);
     await refreshCurrent().catch(() => {});
   }
 }

@@ -9,7 +9,7 @@
 <body>
 
   <header class="topbar">
-    <h1>Wyceniacz <span class="unit">MD</span></h1>
+    <h1>Wyceniacz</h1>
     <div class="statusline">
       <span id="state-pill" class="pill">Łączenie…</span>
       <span id="online-pill" class="pill">Online: –</span>
@@ -22,24 +22,28 @@
     <div id="sections" class="sections"></div>
 
     <section class="panel">
-      <div class="panel-block">
-        <label class="panel-label" for="jira">Link do ticketu w Jirze</label>
-        <div class="link-row">
-          <input id="jira" type="url" spellcheck="false"
-                 placeholder="https://twoja-firma.atlassian.net/browse/ABC-123">
-          <button id="go" type="button" class="btn">Przejdź do linku</button>
-        </div>
+      <div class="link-group">
+        <label class="panel-label" for="jira">Link</label>
+        <input id="jira" type="url" spellcheck="false" placeholder="adres ticketu w Jirze">
+        <button id="go" type="button" class="icon-btn"
+                title="Otwórz w nowej karcie" aria-label="Otwórz link w nowej karcie">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+            <polyline points="15 3 21 3 21 9"></polyline>
+            <line x1="10" y1="14" x2="21" y2="3"></line>
+          </svg>
+        </button>
       </div>
 
-      <div class="panel-block controls">
-        <div class="buttons">
-          <button id="reveal" type="button" class="btn primary">Odkryj</button>
-          <button id="reset" type="button" class="btn danger">Resetuj</button>
-        </div>
-        <div class="sum">
-          <span class="sum-label">Suma (BE + FE + Testy)</span>
-          <span id="sum" class="sum-value">–</span>
-        </div>
+      <div class="buttons">
+        <button id="reveal" type="button" class="btn primary">Odkryj</button>
+        <button id="reset" type="button" class="btn danger">Resetuj</button>
+      </div>
+
+      <div class="sum">
+        <span class="sum-label">Suma (BE + FE + Testy)</span>
+        <span id="sum" class="sum-value">–</span>
       </div>
     </section>
 

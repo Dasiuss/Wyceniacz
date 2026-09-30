@@ -41,11 +41,17 @@ create table if not exists wyceniacz.votes (
   voting_id  uuid not null references wyceniacz.votings (id) on delete cascade,
   voter_id   uuid not null,
   section    text not null check (section in ('be', 'fe', 'qa')),
-  value      numeric(5, 2) not null check (value >= 0.5 and value <= 15),
+  value      numeric(5, 2) not null check (value >= 1 and value <= 15),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (voting_id, voter_id, section)
 );
+
+-- Zakres wycen to 1-15 MD. Alter naprawia rowniez baze postawiona wczesniejsza
+-- wersja skryptu (ktora dopuszczala 0.5).
+alter table wyceniacz.votes drop constraint if exists votes_value_check;
+alter table wyceniacz.votes
+  add constraint votes_value_check check (value >= 1 and value <= 15);
 
 create index if not exists votes_voting_idx on wyceniacz.votes (voting_id);
 
@@ -255,8 +261,8 @@ begin
     raise exception 'Nieznana sekcja: %', p_section;
   end if;
 
-  if p_value is null or p_value < 0.5 or p_value > 15 then
-    raise exception 'Wycena poza zakresem 0.5-15 MD';
+  if p_value is null or p_value < 1 or p_value > 15 then
+    raise exception 'Wycena poza zakresem 1-15 MD';
   end if;
 
   r := wyceniacz.ensure_voting();
@@ -284,6 +290,41 @@ begin
   values (r.id, p_voter_id, p_section, round(p_value, 2))
   on conflict (voting_id, voter_id, section)
   do update set value = excluded.value, updated_at = now();
+end;
+$$;
+
+-- Cofniecie wlasnego glosu (klikniecie jeszcze raz w aktywny przycisk).
+-- anon nie ma prawa DELETE, wiec kasowanie musi isc przez te funkcje.
+create or replace function wyceniacz.withdraw_vote(
+  p_voter_id uuid,
+  p_section  text
+)
+returns void
+language plpgsql
+security definer
+set search_path = wyceniacz, pg_temp
+as $$
+declare
+  r wyceniacz.votings;
+begin
+  if p_voter_id is null then
+    raise exception 'Brak identyfikatora glosujacego';
+  end if;
+
+  if p_section not in ('be', 'fe', 'qa') then
+    raise exception 'Nieznana sekcja: %', p_section;
+  end if;
+
+  r := wyceniacz.ensure_voting();
+
+  if r.status <> 'open' then
+    raise exception 'Glosowanie jest juz odkryte';
+  end if;
+
+  delete from wyceniacz.votes
+   where voting_id = r.id
+     and voter_id = p_voter_id
+     and section = p_section;
 end;
 $$;
 
@@ -348,6 +389,7 @@ $$;
 revoke execute on function wyceniacz.get_state()            from public;
 revoke execute on function wyceniacz.get_history()          from public;
 revoke execute on function wyceniacz.submit_vote(uuid, text, numeric) from public;
+revoke execute on function wyceniacz.withdraw_vote(uuid, text)         from public;
 revoke execute on function wyceniacz.set_jira_url(text)     from public;
 revoke execute on function wyceniacz.reveal_voting()        from public;
 revoke execute on function wyceniacz.reset_voting()         from public;
@@ -355,6 +397,7 @@ revoke execute on function wyceniacz.reset_voting()         from public;
 grant execute on function wyceniacz.get_state()            to anon, authenticated, service_role;
 grant execute on function wyceniacz.get_history()          to anon, authenticated, service_role;
 grant execute on function wyceniacz.submit_vote(uuid, text, numeric) to anon, authenticated, service_role;
+grant execute on function wyceniacz.withdraw_vote(uuid, text)         to anon, authenticated, service_role;
 grant execute on function wyceniacz.set_jira_url(text)     to anon, authenticated, service_role;
 grant execute on function wyceniacz.reveal_voting()        to anon, authenticated, service_role;
 grant execute on function wyceniacz.reset_voting()         to anon, authenticated, service_role;

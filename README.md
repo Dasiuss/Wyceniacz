@@ -19,14 +19,17 @@ Komputer-first, vanilla JS, bez builda. Stan trzyma Supabase (Postgres + Realtim
   Wymaga podwójnego potwierdzenia: pierwszy klik zmienia napis na „Potwierdź reset".
   Reset bez wcześniejszego odkrycia nie zapisuje niczego do historii.
 - **Link do Jiry** jest edytowalny zawsze; historia zapamiętuje go razem z głosowaniem.
+  Przycisk obok otwiera go w nowej karcie.
+- **Cofnąć głos** można klikając drugi raz we własny, aktywny przycisk.
 - **Online** pokazuje, ile osób ma aktualnie otwartą stronę (jeden licznik na przeglądarkę).
 
 ### Zasady wyliczeń
 
 | Rzecz | Zasada |
 | --- | --- |
-| Skala przycisków | `0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6` |
-| Pole własnej wartości | dowolna liczba z zakresu `0.5 – 15`, zapis z dokładnością do 2 miejsc |
+| Skala przycisków | `1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6` — po dwa w rzędzie, obok „6" pole własnej wartości |
+| Pole własnej wartości | dowolna liczba z zakresu `1 – 15`, zapis z dokładnością do 2 miejsc |
+| Cofanie głosu | kliknięcie własnego, aktywnego przycisku drugi raz (albo wyczyszczenie pola) |
 | Średnia sekcji | średnia głosów zaokrąglona **w górę** do wielokrotności `0.5` (ceiling) |
 | Sekcja bez głosów | lista `–`, średnia `–`, do sumy wchodzi jako `0` |
 | Suma | suma trzech zaokrąglonych średnich (BE + FE + Testy) |
@@ -48,8 +51,8 @@ Skrypt jest idempotentny (można go uruchamiać wielokrotnie) i tworzy:
 - tabele `wyceniacz.votings` i `wyceniacz.votes`,
 - RLS, w której `anon` ma **wyłącznie `SELECT`** (potrzebny Realtime'owi); każdy zapis
   idzie przez funkcje `SECURITY DEFINER`,
-- RPC: `get_state`, `get_history`, `submit_vote`, `set_jira_url`, `reveal_voting`,
-  `reset_voting`,
+- RPC: `get_state`, `get_history`, `submit_vote`, `withdraw_vote`, `set_jira_url`,
+  `reveal_voting`, `reset_voting`,
 - trigger przycinający historię do 100 najnowszych głosowań,
 - publikację Realtime dla obu tabel.
 
@@ -122,7 +125,7 @@ Klucz publishable jest publiczny, więc baza sama się broni:
 
 - `anon` może **tylko czytać**. Nie da się `INSERT`/`UPDATE`/`DELETE` przez REST.
 - Wszystkie zapisy przechodzą przez RPC, które walidują dane wejściowe:
-  - zakres wartości `0.5 – 15`,
+  - zakres wartości `1 – 15`,
   - sekcja wyłącznie `be` / `fe` / `qa`,
   - **maksymalnie 10 głosów na sekcję** w jednym głosowaniu,
   - link do Jiry ucinany do 500 znaków.
