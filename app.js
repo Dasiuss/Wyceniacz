@@ -1,5 +1,5 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, DB_SCHEMA } from './config.js';
+import { SUPABASE_URL, SUPABASE_KEY } from './config.js';
 
 /* ------------------------------------------------------------------ */
 /*  Konfiguracja                                                       */
@@ -19,16 +19,25 @@ const MIN_VALUE = 1;
 const MAX_VALUE = 15;
 
 const VOTER_STORAGE_KEY = 'wyceniacz.voterId';
+const STATE_STORAGE_KEY = 'wyceniacz.state';
 const CHANNEL_NAME = 'wyceniacz';
+
 const RESET_LABEL = 'Resetuj';
 const RESET_CONFIRM_LABEL = 'Potwierdź reset';
 const RESET_CONFIRM_MS = 6000;
 
+// Brak bazy to brak wspolnego magazynu: kazda karta trzyma wlasny obraz glosowania
+// i cyklicznie go oglasza. Broadcast nie gwarantuje dostarczenia, wiec dosylka jest
+// mechanizmem samonaprawy - bez niej jedna zgubiona wiadomosc rozjechalaby karty.
+const HEARTBEAT_MS = 15000;
+
+// Chwila na odpowiedz innych kart. Bez tego swiezo otwarta karta mrugnelaby pustym
+// glosowaniem, zanim dowiedzialaby sie, ze ktos juz glosuje.
+const PEER_GRACE_MS = 1200;
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
-  db: { schema: DB_SCHEMA },
-});
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 /* ------------------------------------------------------------------ */
 /*  Narzedzia                                                          */
@@ -92,37 +101,45 @@ function getVoterId() {
   return id;
 }
 
-function sectionStats(votes, section) {
-  const values = votes
-    .filter((v) => v.section === section)
-    .map((v) => Number(v.value))
-    .filter(Number.isFinite)
-    .sort((a, b) => a - b);
-
-  if (values.length === 0) return { count: 0, values, avg: null };
-
-  const avg = ceilHalf(values.reduce((a, b) => a + b, 0) / values.length);
-  return { count: values.length, values, avg };
+// Klucz dnia w czasie lokalnym. Wchodzi do identyfikatora glosowania, dzieki
+// czemu glos z zeszlego tygodnia nie ma jak dopasowac sie do dzisiejszego.
+function todayKey(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
-// Suma = suma trzech zaokraglonych (ceiling do 0.5) srednich sekcji.
-// Sekcja bez glosow liczy sie jako 0.
-function totalSum(votes) {
-  return SECTIONS.reduce((acc, s) => acc + (sectionStats(votes, s.key).avg ?? 0), 0);
+// Identyfikator glosowania: "<dzien>#<numer w tym dniu>", np. 2026-09-30#2.
+const roundDay = (id) => String(id).split('#')[0];
+
+const roundNo = (id) => {
+  const n = Number(String(id).split('#')[1]);
+  return Number.isFinite(n) ? n : 0;
+};
+
+// Porownanie identyfikatorow: najpierw dzien, potem numer. Porownanie samych
+// napisow nie wystarczy, bo "#10" wypada przed "#2".
+function compareRounds(a, b) {
+  const da = roundDay(a);
+  const db = roundDay(b);
+  if (da !== db) return da < db ? -1 : 1;
+
+  const na = roundNo(a);
+  const nb = roundNo(b);
+  if (na === nb) return 0;
+  return na < nb ? -1 : 1;
 }
 
-function myVote(section) {
-  return state.votes.find((v) => v.section === section && v.voter_id === voterId) || null;
-}
-
-function ticketLabel(raw) {
-  try {
-    const u = new URL(raw);
-    const last = u.pathname.split('/').filter(Boolean).pop();
-    return last ? decodeURIComponent(last) : u.hostname;
-  } catch {
-    return String(raw).slice(0, 60);
-  }
+function normalizeRound(r) {
+  return {
+    id: String(r.id),
+    status: r.status === 'revealed' ? 'revealed' : 'open',
+    revealedAt: r.revealedAt || null,
+    jiraUrl: r.jiraUrl || null,
+    urlAt: Number(r.urlAt) || 0,
+    at: Number(r.at) || 0,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -131,19 +148,21 @@ function ticketLabel(raw) {
 
 const voterId = getVoterId();
 
+// round  - biezace glosowanie; null tylko przez chwile po starcie, zanim wiemy, co jest grane
+// votes  - mapa voterId -> { be?, fe?, qa?, rev }. Wpis jest wlasnoscia jednej osoby:
+//          tylko ona go zapisuje, a pozostali go przekazuja i porownuja po "rev".
 const state = {
-  voting: null,
-  votes: [],
-  history: [],
+  round: null,
+  votes: new Map(),
   online: 0,
 };
 
 const refs = Object.create(null);
 
+let channel = null;
+let lastRev = 0;
 let resetArmed = false;
 let resetTimer = null;
-let currentTimer = null;
-let historyTimer = null;
 let toastTimer = null;
 
 /* ------------------------------------------------------------------ */
@@ -160,7 +179,246 @@ const goBtn = document.getElementById('go');
 const revealBtn = document.getElementById('reveal');
 const resetBtn = document.getElementById('reset');
 const sumEl = document.getElementById('sum');
-const historyEl = document.getElementById('history');
+
+/* ------------------------------------------------------------------ */
+/*  Wlasny glos                                                        */
+/* ------------------------------------------------------------------ */
+
+const myEntry = () => state.votes.get(voterId) || null;
+
+function myVote(section) {
+  const e = myEntry();
+  if (!e) return null;
+  const v = Number(e[section]);
+  return Number.isFinite(v) ? v : null;
+}
+
+// "rev" to pieczatka czasu zmiany wlasnego glosu. Musi rosnac, bo dzieki niej
+// stare kopie krażace po sieci przegrywaja z nowszymi - bez tego ktos, kto był
+// offline, moglby przywrocic glos, ktory wlasciciel juz cofnal.
+function nextRev() {
+  lastRev = Math.max(Date.now(), lastRev + 1);
+  return lastRev;
+}
+
+// value === null cofa glos w tej sekcji.
+function setMyVote(section, value) {
+  const entry = { ...(myEntry() || {}), rev: nextRev() };
+
+  if (value === null) delete entry[section];
+  else entry[section] = value;
+
+  state.votes.set(voterId, entry);
+}
+
+// Scalenie cudzych glosow. Wpis wygrywa, gdy ma wyzszy "rev" - kopia, ktora krazyla
+// po sieci dluzej, przegrywa z nowsza. Kolejnosc wiadomosci nie ma znaczenia.
+function mergeVotes(incoming) {
+  if (!incoming || typeof incoming !== 'object') return false;
+
+  let changed = false;
+
+  for (const [id, entry] of Object.entries(incoming)) {
+    if (!entry || typeof entry !== 'object') continue;
+
+    const rev = Number(entry.rev) || 0;
+    const known = state.votes.get(id);
+
+    if (!known || rev > (Number(known.rev) || 0)) {
+      state.votes.set(id, entry);
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Pamiec lokalna                                                     */
+/* ------------------------------------------------------------------ */
+
+function loadStored() {
+  let raw = null;
+  try {
+    raw = localStorage.getItem(STATE_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+
+  try {
+    const s = JSON.parse(raw);
+    if (!s || typeof s.roundId !== 'string') return null;
+
+    // Twarda polnoc: slad z innego dnia jest martwy. To jest ten warunek,
+    // ktory nie pozwala zeszlotygodniowemu glosowi wrocic do nowego glosowania.
+    if (roundDay(s.roundId) !== todayKey()) return null;
+
+    return s;
+  } catch {
+    return null;
+  }
+}
+
+function persist() {
+  if (!state.round) return;
+
+  const votes = {};
+  for (const [id, entry] of state.votes) votes[id] = entry;
+
+  try {
+    localStorage.setItem(
+      STATE_STORAGE_KEY,
+      JSON.stringify({
+        roundId: state.round.id,
+        status: state.round.status,
+        revealedAt: state.round.revealedAt,
+        jiraUrl: state.round.jiraUrl,
+        urlAt: state.round.urlAt,
+        at: state.round.at,
+        votes,
+      })
+    );
+  } catch {
+    /* brak zapisu - apka dziala dalej, tylko bez pamieci */
+  }
+}
+
+function applyStored() {
+  const s = loadStored();
+  if (!s) return false;
+
+  state.round = normalizeRound({
+    id: s.roundId,
+    status: s.status,
+    revealedAt: s.revealedAt,
+    jiraUrl: s.jiraUrl,
+    urlAt: s.urlAt,
+    at: s.at,
+  });
+
+  state.votes = new Map();
+  mergeVotes(s.votes);
+
+  const own = state.votes.get(voterId);
+  lastRev = own ? Number(own.rev) || 0 : 0;
+
+  return true;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Glosowanie                                                         */
+/* ------------------------------------------------------------------ */
+
+// Nowe glosowanie uniewaznia wszystkie dotychczasowe glosy - nalezaly do
+// poprzedniego. Dlatego zmiana identyfikatora zawsze czysci mape glosow.
+function adoptRound(r) {
+  state.round = r;
+  state.votes.clear();
+  persist();
+}
+
+function startRound(n) {
+  adoptRound(normalizeRound({ id: `${todayKey()}#${n}`, status: 'open', at: Date.now() }));
+  renderAll();
+  sendState();
+}
+
+function resetVoting() {
+  const n = state.round ? roundNo(state.round.id) : 0;
+
+  disarmReset();
+  linkInput.value = '';
+  startRound(Math.max(1, n + 1));
+}
+
+function revealVoting() {
+  if (!state.round || state.round.status === 'revealed') return;
+
+  const at = Date.now();
+  state.round = {
+    ...state.round,
+    status: 'revealed',
+    revealedAt: new Date(at).toISOString(),
+    at,
+  };
+
+  persist();
+  renderAll();
+  sendState();
+}
+
+function saveLink(raw) {
+  if (!state.round) return;
+
+  const at = Date.now();
+  state.round = { ...state.round, jiraUrl: raw || null, urlAt: at, at };
+
+  persist();
+  renderPanel();
+  sendState();
+}
+
+// Scalenie cudzego stanu. Zwraca 'adopted' | 'merged' | 'same' | 'older' | 'foreign'.
+function mergeRound(incoming) {
+  if (!incoming || typeof incoming.id !== 'string') return 'foreign';
+
+  // Glosowanie z innego dnia nie nalezy do nas - wymuszamy swoj dzien.
+  if (roundDay(incoming.id) !== todayKey()) return 'foreign';
+
+  const r = normalizeRound(incoming);
+
+  if (!state.round) {
+    adoptRound(r);
+    return 'adopted';
+  }
+
+  const cmp = compareRounds(r.id, state.round.id);
+
+  if (cmp > 0) {
+    adoptRound(r);
+    return 'adopted';
+  }
+
+  if (cmp < 0) return 'older';
+
+  const cur = state.round;
+  const merged = {
+    ...cur,
+    status: cur.status === 'revealed' || r.status === 'revealed' ? 'revealed' : 'open',
+    revealedAt: cur.revealedAt || r.revealedAt || null,
+    at: Math.max(cur.at, r.at),
+  };
+
+  if (r.urlAt > cur.urlAt) {
+    merged.jiraUrl = r.jiraUrl;
+    merged.urlAt = r.urlAt;
+  }
+
+  const changed = merged.status !== cur.status || merged.jiraUrl !== cur.jiraUrl;
+  state.round = merged;
+
+  return changed ? 'merged' : 'same';
+}
+
+function applyRemote(payload) {
+  if (!payload || typeof payload !== 'object') return;
+  if (payload.voterId === voterId) return;
+
+  const roundOutcome = mergeRound(payload.round);
+  const votesChanged = mergeVotes(payload.votes);
+
+  if (roundOutcome === 'older' || roundOutcome === 'foreign') {
+    // Znamy nowsze albo wlasciwe glosowanie - niech nadawca dogoni.
+    sendState();
+    return;
+  }
+
+  if (roundOutcome !== 'same' || votesChanged) {
+    persist();
+    renderAll();
+  }
+}
 
 /* ------------------------------------------------------------------ */
 /*  Budowa interfejsu (raz)                                            */
@@ -217,7 +475,7 @@ function buildUI() {
       if (raw === '') {
         errEl.textContent = '';
         const mine = myVote(s.key);
-        if (mine && !isPreset(Number(mine.value))) withdrawVote(s.key);
+        if (mine !== null && !isPreset(mine)) withdrawVote(s.key);
         return;
       }
 
@@ -290,10 +548,9 @@ function renderSelection(key) {
   const r = refs[key];
   if (!r) return;
 
-  const canVote = Boolean(state.voting) && state.voting.status === 'open';
+  const canVote = Boolean(state.round) && state.round.status === 'open';
 
-  const mine = myVote(key);
-  const mineValue = mine ? Number(mine.value) : null;
+  const mineValue = myVote(key);
   const mineIsCustom = mineValue !== null && !isPreset(mineValue);
 
   // Wpisana, jeszcze niezatwierdzona wartosc tez jest biezacym wyborem.
@@ -316,16 +573,39 @@ function renderSelection(key) {
   }
 }
 
+// Zbiera glosy wszystkich osob w danej sekcji i liczy srednia (ceiling do 0.5).
+function sectionStats(section) {
+  const values = [];
+
+  for (const entry of state.votes.values()) {
+    const v = Number(entry[section]);
+    if (Number.isFinite(v)) values.push(v);
+  }
+
+  values.sort((a, b) => a - b);
+  if (values.length === 0) return { count: 0, values, avg: null };
+
+  return {
+    count: values.length,
+    values,
+    avg: ceilHalf(values.reduce((a, b) => a + b, 0) / values.length),
+  };
+}
+
+// Suma = suma trzech zaokraglonych (ceiling do 0.5) srednich sekcji.
+// Sekcja bez glosow liczy sie jako 0.
+function totalSum() {
+  return SECTIONS.reduce((acc, s) => acc + (sectionStats(s.key).avg ?? 0), 0);
+}
+
 function renderSections() {
-  const status = state.voting ? state.voting.status : null;
+  const status = state.round ? state.round.status : null;
   const revealed = status === 'revealed';
 
   for (const s of SECTIONS) {
     const r = refs[s.key];
-    const stats = sectionStats(state.votes, s.key);
-
-    const mine = myVote(s.key);
-    const mineValue = mine ? Number(mine.value) : null;
+    const stats = sectionStats(s.key);
+    const mineValue = myVote(s.key);
 
     // W trakcie pisania nie nadpisujemy pola - inaczej przerysowanie zgubiloby
     // wpisywana wartosc.
@@ -355,27 +635,27 @@ function renderSections() {
 }
 
 function renderPanel() {
-  const v = state.voting;
-  const revealed = Boolean(v) && v.status === 'revealed';
+  const r = state.round;
+  const revealed = Boolean(r) && r.status === 'revealed';
 
   if (document.activeElement !== linkInput) {
-    linkInput.value = v && v.jira_url ? v.jira_url : '';
+    linkInput.value = r && r.jiraUrl ? r.jiraUrl : '';
   }
 
   const typed = linkInput.value.trim();
-  goBtn.disabled = !safeUrl(typed || (v && v.jira_url));
+  goBtn.disabled = !safeUrl(typed || (r && r.jiraUrl));
 
   revealBtn.disabled = revealed;
 
   resetBtn.textContent = resetArmed ? RESET_CONFIRM_LABEL : RESET_LABEL;
   resetBtn.classList.toggle('armed', resetArmed);
   resetBtn.title = revealed
-    ? 'Rozpocznij nowe głosowanie — to jest już zapisane w historii'
+    ? 'Rozpocznij nowe głosowanie'
     : 'Wyczyść głosy i zacznij od nowa (wymaga potwierdzenia)';
 
-  sumEl.textContent = revealed ? `${fmt(totalSum(state.votes))} MD` : '–';
+  sumEl.textContent = revealed ? `${fmt(totalSum())} MD` : '–';
 
-  if (!v) {
+  if (!r) {
     statePill.textContent = 'Łączenie…';
     statePill.removeAttribute('data-state');
   } else if (revealed) {
@@ -387,93 +667,6 @@ function renderPanel() {
   }
 }
 
-function renderHistory() {
-  historyEl.textContent = '';
-
-  if (state.history.length === 0) {
-    const p = document.createElement('p');
-    p.className = 'muted';
-    p.textContent = 'Brak zakończonych głosowań.';
-    historyEl.appendChild(p);
-    return;
-  }
-
-  for (const h of state.history) {
-    const item = document.createElement('details');
-    item.className = 'hist';
-
-    const summary = document.createElement('summary');
-
-    const date = document.createElement('span');
-    date.className = 'hist-date';
-    date.textContent = h.revealed_at
-      ? new Date(h.revealed_at).toLocaleString('pl-PL', {
-          dateStyle: 'short',
-          timeStyle: 'short',
-        })
-      : '—';
-    summary.appendChild(date);
-
-    const linkWrap = document.createElement('span');
-    linkWrap.className = 'hist-link';
-
-    if (h.jira_url) {
-      const url = safeUrl(h.jira_url);
-      const a = document.createElement('a');
-      a.textContent = ticketLabel(h.jira_url);
-
-      if (url) {
-        a.href = url;
-        a.target = '_blank';
-        a.rel = 'noopener noreferrer';
-      } else {
-        a.className = 'plain';
-      }
-
-      linkWrap.appendChild(a);
-    } else {
-      linkWrap.textContent = 'bez linku';
-      linkWrap.classList.add('muted');
-    }
-    summary.appendChild(linkWrap);
-
-    const sum = document.createElement('span');
-    sum.className = 'hist-sum';
-    sum.textContent = `${fmt(totalSum(h.votes))} MD`;
-    summary.appendChild(sum);
-
-    item.appendChild(summary);
-
-    const body = document.createElement('div');
-    body.className = 'hist-body';
-
-    for (const s of SECTIONS) {
-      const st = sectionStats(h.votes, s.key);
-
-      const row = document.createElement('div');
-      row.className = 'hist-row';
-
-      const label = document.createElement('span');
-      label.className = 'hist-label';
-      label.textContent = s.label;
-
-      const vals = document.createElement('span');
-      vals.className = 'hist-vals';
-      vals.textContent = st.count ? st.values.map(fmt).join(', ') : '–';
-
-      const avg = document.createElement('span');
-      avg.className = 'hist-avg';
-      avg.textContent = st.avg === null ? '–' : `${fmt(st.avg)} MD`;
-
-      row.append(label, vals, avg);
-      body.appendChild(row);
-    }
-
-    item.appendChild(body);
-    historyEl.appendChild(item);
-  }
-}
-
 function renderAll() {
   renderSections();
   renderPanel();
@@ -481,55 +674,17 @@ function renderAll() {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Pobieranie danych                                                  */
-/* ------------------------------------------------------------------ */
-
-async function refreshCurrent() {
-  const { data, error } = await supabase.rpc('get_state');
-  if (error) throw error;
-
-  state.voting = data ? data.voting : null;
-  state.votes = data && Array.isArray(data.votes) ? data.votes : [];
-
-  fatalEl.hidden = true;
-  renderSections();
-  renderPanel();
-}
-
-async function refreshHistory() {
-  const { data, error } = await supabase.rpc('get_history');
-  if (error) throw error;
-
-  state.history = Array.isArray(data) ? data : [];
-  renderHistory();
-}
-
-function scheduleCurrent() {
-  clearTimeout(currentTimer);
-  currentTimer = setTimeout(() => {
-    refreshCurrent().catch(showFatal);
-  }, 200);
-}
-
-function scheduleHistory() {
-  clearTimeout(historyTimer);
-  historyTimer = setTimeout(() => {
-    refreshHistory().catch(() => {});
-  }, 400);
-}
-
-/* ------------------------------------------------------------------ */
 /*  Akcje                                                              */
 /* ------------------------------------------------------------------ */
 
-async function castVote(section, value, fromButton) {
-  if (!state.voting || state.voting.status !== 'open') {
+function castVote(section, value, fromButton) {
+  if (!state.round || state.round.status !== 'open') {
     toast('Głosowanie jest już odkryte — kliknij Resetuj, aby zacząć nowe.');
     return;
   }
 
   // Klikniecie w przycisk, ktory jest widocznie zaznaczony, cofa glos.
-  // Patrzymy na stan interfejsu, a nie na baze: gdy w polu wpisano inna
+  // Patrzymy na stan interfejsu, a nie na dane: gdy w polu wpisano inna
   // wartosc, przycisk nie jest zaznaczony, wiec klikniecie ma go wybrac,
   // a nie cofac.
   if (fromButton) {
@@ -537,67 +692,40 @@ async function castVote(section, value, fromButton) {
     const przycisk = idx >= 0 ? refs[section].buttons[idx] : null;
 
     if (przycisk && przycisk.classList.contains('active')) {
-      await withdrawVote(section);
+      withdrawVote(section);
       return;
     }
   }
 
-  try {
-    const { error } = await supabase.rpc('submit_vote', {
-      p_voter_id: voterId,
-      p_section: section,
-      p_value: value,
-    });
-    if (error) throw error;
+  setMyVote(section, value);
 
-    if (fromButton) {
-      const r = refs[section];
-      if (r) {
-        r.errEl.textContent = '';
-        if (document.activeElement !== r.input) r.input.value = '';
-      }
-    }
-
-    await refreshCurrent();
-  } catch (e) {
-    toast(`Nie udało się zapisać głosu: ${msg(e)}`);
-    await refreshCurrent().catch(() => {});
+  const r = refs[section];
+  if (fromButton && r && document.activeElement !== r.input) {
+    r.errEl.textContent = '';
+    r.input.value = '';
   }
+
+  persist();
+  renderSections();
+  renderPanel();
+  sendState();
 }
 
-async function withdrawVote(section) {
-  if (!state.voting || state.voting.status !== 'open') return;
+function withdrawVote(section) {
+  if (!state.round || state.round.status !== 'open') return;
 
-  try {
-    const { error } = await supabase.rpc('withdraw_vote', {
-      p_voter_id: voterId,
-      p_section: section,
-    });
-    if (error) throw error;
+  setMyVote(section, null);
 
-    const r = refs[section];
-    if (r) {
-      r.errEl.textContent = '';
-      if (document.activeElement !== r.input) r.input.value = '';
-    }
-
-    await refreshCurrent();
-  } catch (e) {
-    toast(`Nie udało się cofnąć głosu: ${msg(e)}`);
-    await refreshCurrent().catch(() => {});
+  const r = refs[section];
+  if (r) {
+    r.errEl.textContent = '';
+    if (document.activeElement !== r.input) r.input.value = '';
   }
-}
 
-async function saveLink(raw) {
-  try {
-    const { error } = await supabase.rpc('set_jira_url', { p_url: raw || '' });
-    if (error) throw error;
-
-    if (state.voting) state.voting.jira_url = raw || null;
-    renderPanel();
-  } catch (e) {
-    toast(`Nie udało się zapisać linku: ${msg(e)}`);
-  }
+  persist();
+  renderSections();
+  renderPanel();
+  sendState();
 }
 
 function armReset() {
@@ -620,13 +748,13 @@ function disarmReset() {
 
 linkInput.addEventListener('change', () => {
   const typed = linkInput.value.trim();
-  const stored = (state.voting && state.voting.jira_url) || '';
+  const stored = (state.round && state.round.jiraUrl) || '';
 
   if (typed !== stored) saveLink(typed);
 });
 
 goBtn.addEventListener('click', () => {
-  const stored = (state.voting && state.voting.jira_url) || '';
+  const stored = (state.round && state.round.jiraUrl) || '';
   const raw = linkInput.value.trim() || stored;
   const url = safeUrl(raw);
 
@@ -639,26 +767,16 @@ goBtn.addEventListener('click', () => {
   window.open(url, '_blank', 'noopener');
 });
 
-revealBtn.addEventListener('click', async () => {
-  revealBtn.disabled = true;
-
-  try {
-    const { error } = await supabase.rpc('reveal_voting');
-    if (error) throw error;
-
-    await Promise.all([refreshCurrent(), refreshHistory()]);
-  } catch (e) {
-    toast(`Nie udało się odkryć: ${msg(e)}`);
-  } finally {
-    renderPanel();
-  }
+revealBtn.addEventListener('click', () => {
+  revealVoting();
 });
 
-resetBtn.addEventListener('click', async () => {
-  const revealed = Boolean(state.voting) && state.voting.status === 'revealed';
+resetBtn.addEventListener('click', () => {
+  const revealed = Boolean(state.round) && state.round.status === 'revealed';
 
   // Potwierdzenie ma sens tylko przed odkryciem - wtedy reset kasuje glosy bez
-  // sladu. Po odkryciu glosowanie jest juz w historii, wiec reset jest natychmiastowy.
+  // sladu. Po odkryciu wartosci sa juz widoczne dla wszystkich, wiec nic nie przepada
+  // i reset jest natychmiastowy.
   if (revealed) {
     if (resetArmed) disarmReset();
   } else if (!resetArmed) {
@@ -668,20 +786,7 @@ resetBtn.addEventListener('click', async () => {
     disarmReset();
   }
 
-  resetBtn.disabled = true;
-
-  try {
-    const { error } = await supabase.rpc('reset_voting');
-    if (error) throw error;
-
-    linkInput.value = '';
-    await Promise.all([refreshCurrent(), refreshHistory()]);
-  } catch (e) {
-    toast(`Nie udało się zresetować: ${msg(e)}`);
-  } finally {
-    resetBtn.disabled = false;
-    renderPanel();
-  }
+  resetVoting();
 });
 
 // Klikniecie poza przyciskiem rozbraja potwierdzenie resetu.
@@ -709,41 +814,54 @@ function toast(text) {
 
 function showFatal(e) {
   fatalEl.hidden = false;
-  fatalEl.textContent =
-    `Nie udało się połączyć z bazą: ${msg(e)} — ` +
-    `jeśli to błąd 404 / PGRST106, dodaj schemat „${DB_SCHEMA}” w Supabase → ` +
-    'Project Settings → API → Exposed schemas i uruchom sql/setup.sql.';
+  fatalEl.textContent = `Brak połączenia na żywo: ${msg(e)} — ponawiam próbę w tle.`;
 }
 
 /* ------------------------------------------------------------------ */
-/*  Realtime + Presence                                                */
+/*  Realtime + Presence (bez tabel)                                    */
 /* ------------------------------------------------------------------ */
 
+// Bez bazy nie ma skad wziac stanu: kazda karta oglasza to, co wie, a pozostale
+// to scala. Rozstrzygaja dwa niezmienniki:
+//   1. numer glosowania (wiekszy wygrywa) - decyduje, ktore glosowanie trwa,
+//   2. "rev" wpisu glosu (wiekszy wygrywa) - decyduje, czyj glos jest nowszy.
+// Dzieki nim kolejność wiadomosci nie ma znaczenia, wiec nie ma czego zsynchronizowac.
+function sendState() {
+  if (!channel || !state.round) return;
+
+  const votes = {};
+  for (const [id, entry] of state.votes) votes[id] = entry;
+
+  Promise.resolve(
+    channel.send({
+      type: 'broadcast',
+      event: 'state',
+      payload: { voterId, round: state.round, votes },
+    })
+  ).catch(() => {});
+}
+
 function subscribe() {
-  const channel = supabase
+  channel = supabase
     .channel(CHANNEL_NAME, { config: { presence: { key: voterId } } })
-    .on(
-      'postgres_changes',
-      { event: '*', schema: DB_SCHEMA, table: 'votings' },
-      () => {
-        scheduleCurrent();
-        scheduleHistory();
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: DB_SCHEMA, table: 'votes' },
-      () => scheduleCurrent()
-    )
+    .on('broadcast', { event: 'state' }, ({ payload }) => applyRemote(payload))
+    .on('broadcast', { event: 'sync-request' }, ({ payload }) => {
+      if (payload && payload.voterId && payload.voterId !== voterId) sendState();
+    })
     .on('presence', { event: 'sync' }, () => {
       state.online = Object.keys(channel.presenceState()).length;
       renderOnline();
     })
     .subscribe((status) => {
       if (status === 'SUBSCRIBED') {
+        fatalEl.hidden = true;
         channel.track({ at: new Date().toISOString() }).catch(() => {});
+        Promise.resolve(
+          channel.send({ type: 'broadcast', event: 'sync-request', payload: { voterId } })
+        ).catch(() => {});
+        sendState();
       } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-        toast('Utracono połączenie na żywo — odśwież stronę.');
+        showFatal('brak łączności z kanałem');
       }
     });
 }
@@ -752,17 +870,45 @@ function subscribe() {
 /*  Start                                                              */
 /* ------------------------------------------------------------------ */
 
-async function init() {
+function init() {
   buildUI();
+
+  applyStored();
   renderAll();
 
-  try {
-    await Promise.all([refreshCurrent(), refreshHistory()]);
-  } catch (e) {
-    showFatal(e);
-  }
-
   subscribe();
+
+  // Gdy nikt nie odpowiedzial, jestesmy pierwsi - zakladamy glosowanie na dzis.
+  setTimeout(() => {
+    if (!state.round) startRound(1);
+  }, PEER_GRACE_MS);
+
+  // Dosylka: broadcast nie gwarantuje dostarczenia, wiec co jakis czas przypominamy
+  // swój stan. W krotkiej sesji to kilka kilobajtow.
+  setInterval(() => {
+    if (document.visibilityState === 'visible') sendState();
+  }, HEARTBEAT_MS);
+
+  // Twarda polnoc: glosowanie obowiazuje w ramach jednego dnia. Gdy karta przesiedzi
+  // pólnoc, wracamy do stanu wyjsciowego zamiast ciagnac glosy z poprzedniej doby.
+  setInterval(() => {
+    if (state.round && roundDay(state.round.id) !== todayKey()) {
+      linkInput.value = '';
+      startRound(1);
+    }
+  }, 30000);
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+
+    sendState();
+
+    // Powrot do karty po dluzszej przerwie to typowy moment, w ktorym warto
+    // dociagnac to, co przegapilismy.
+    Promise.resolve(
+      channel?.send({ type: 'broadcast', event: 'sync-request', payload: { voterId } })
+    ).catch(() => {});
+  });
 }
 
 init();

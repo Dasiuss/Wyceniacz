@@ -4,28 +4,49 @@ Wewnętrzna apka web do zespołowego wyceniania ticketów Jiry w **MD (osobodnia
 Trzy niezależne sekcje — **Backend**, **Frontend**, **Testy** — głosowanie w czasie
 rzeczywistym, bez logowania i bez imion. Zastępuje plugin do Jiry, który u nas nie działa.
 
-Komputer-first, vanilla JS, bez builda. Stan trzyma Supabase (Postgres + Realtime + Presence).
+Komputer-first, vanilla JS, bez builda.
 
-> **Pracujesz nad kodem?** Zobacz [`AGENTS.md`](AGENTS.md) — architektura, model danych,
-> reguły biznesowe, konwencje i pułapki. Ten plik jest dla użytkownika i wdrożenia.
+> **Nic nie jest nigdzie zapisywane.** Nie ma bazy danych ani historii. Głosy żyją
+> wyłącznie w otwartych przeglądarkach i znikają, gdy wszyscy zamkną stronę.
+
+> **Pracujesz nad kodem?** Zobacz [`AGENTS.md`](AGENTS.md) — architektura, protokół
+> wymiany głosów, reguły biznesowe, konwencje i pułapki. Ten plik jest dla użytkownika.
 
 ---
 
 ## Jak to działa
 
-- Każdy zagłosowany klik leci od razu do bazy i rozchodzi się websocketem do pozostałych.
+- Każdy głos leci od razu przez kanał Realtime do pozostałych otwartych przeglądarek.
 - **Przed** kliknięciem „Odkryj" widać tylko liczbę oddanych głosów w sekcji — nie widać
   ani czyichś wartości, ani tego, ile osób *powinno* zagłosować.
-- **Odkryj** (może kliknąć każdy) pokazuje listę głosów, średnie i sumę. Głosowanie do
-  historii trafia tylko wtedy, gdy ma co najmniej jeden głos.
-- **Resetuj** (może kliknąć każdy) czyści bieżące głosy i link, i startuje nowe głosowanie.
-  **Potwierdzenia wymaga tylko przed odkryciem** — wtedy głosy przepadają bez śladu, więc
-  pierwszy klik zmienia napis na „Potwierdź reset". Po odkryciu głosowanie jest już
-  zapisane w historii, więc reset działa od razu.
-- **Link do Jiry** jest edytowalny zawsze; historia zapamiętuje go razem z głosowaniem.
-  Przycisk obok otwiera go w nowej karcie.
-- **Cofnąć głos** można klikając drugi raz we własny, aktywny przycisk.
-- **Online** pokazuje, ile osób ma aktualnie otwartą stronę (jeden licznik na przeglądarkę).
+- **Odkryj** (może kliknąć każdy) pokazuje listę głosów, średnie i sumę.
+- **Resetuj** (może kliknąć każdy) czyści głosy i link, i startuje nowe głosowanie.
+  **Potwierdzenia wymaga tylko przed odkryciem** — pierwszy klik zmienia napis na
+  „Potwierdź reset". Po odkryciu wartości są już widoczne dla wszystkich, więc reset
+  działa od razu.
+- **Link do Jiry** jest edytowalny zawsze; przycisk obok otwiera go w nowej karcie.
+- **Cofnąć głos** można klikając drugi raz we własny, aktywny przycisk (albo czyszcząc pole).
+- **Online** pokazuje, ile osób ma aktualnie otwartą stronę.
+
+### Głosowanie trwa jeden dzień
+
+Głosowanie ma tożsamość, która zawiera datę — na przykład `2026-09-30#2`. Konsekwencje:
+
+- Po północy obowiązuje już nowy dzień i **wszystkie karty zaczynają puste głosowanie**.
+  Jeśli sesja trwa o 00:00, zostanie przerwana — to celowe i przewidywalne.
+- **Głos z zeszłego tygodnia nie może wrócić** do nowego głosowania: ma inny dzień
+  w swoim identyfikatorze, więc nie ma jak się dopasować.
+- W ramach jednego dnia przeglądarka pamięta ostatni stan, więc przypadkowe odświeżenie
+  strony (F5) nie kasuje wpisanych głosów.
+
+### Dopóki ktoś ma otwartą stronę, stan istnieje
+
+Nie ma serwera, który przechowywałby głosowanie. Każda karta zna bieżący obraz i wymienia
+się nim z pozostałymi. Dlatego:
+
+- gdy choć jedna osoba miała stronę otwartą przez cały czas — obraz wraca,
+- gdy **wszyscy** zamkną przeglądarki — wracają tylko pojedyncze, własne głosy z dysków;
+  reszta przepada. To definicja tego modelu, nie usterka.
 
 ### Zasady wyliczeń
 
@@ -38,44 +59,42 @@ Komputer-first, vanilla JS, bez builda. Stan trzyma Supabase (Postgres + Realtim
 | Sekcja bez głosów | lista `–`, średnia `–`, do sumy wchodzi jako `0` |
 | Suma | suma trzech zaokrąglonych średnich (BE + FE + Testy) |
 | Tożsamość głosującego | losowy UUID w `localStorage` — jeden głos na sekcję na przeglądarkę |
-| Historia | wspólna, w bazie, maksymalnie 100 najnowszych głosowań |
+| Historia | **nie istnieje** — nic nie jest zapisywane |
 
 ---
 
 ## Konfiguracja Supabase
 
-### 1. Uruchom `sql/setup.sql`
+Potrzebny jest tylko projekt z włączonym Realtime i **dwiema wartościami** w
+[`config.js`](config.js): adresem projektu i kluczem **publishable**.
 
-Supabase Dashboard → **SQL Editor** → *New query* → wklej całą zawartość
-[`sql/setup.sql`](sql/setup.sql) → **Run**.
+**Żadnych tabel, schematów ani SQL-a.** Aplikacja korzysta wyłącznie z kanału
+Realtime (`broadcast` + `presence`), który działa od razu, bez przygotowania bazy.
 
-Skrypt jest idempotentny (można go uruchamiać wielokrotnie) i tworzy:
+Publishable key jest z założenia publiczny — trafia do przeglądarki. Nigdy nie wklejaj
+tu klucza `secret` / `service_role`.
 
-- schemat `wyceniacz` — **nie rusza** `public.meetings` ani niczego innego w projekcie,
-- tabele `wyceniacz.votings` i `wyceniacz.votes`,
-- RLS, w której `anon` ma **wyłącznie `SELECT`** (potrzebny Realtime'owi); każdy zapis
-  idzie przez funkcje `SECURITY DEFINER`,
-- RPC: `get_state`, `get_history`, `submit_vote`, `withdraw_vote`, `set_jira_url`,
-  `reveal_voting`, `reset_voting`,
-- trigger przycinający historię do 100 najnowszych głosowań,
-- publikację Realtime dla obu tabel.
+---
 
-### 2. Wystaw schemat na API ⚠️
+## Sprzątanie po starej wersji (opcjonalne)
 
-Dashboard → **Project Settings → API → Exposed schemas** → dopisz `wyceniacz` i zapisz.
+Wcześniejsza wersja trzymała głosy i historię w schemacie `wyceniacz`. Obecna wersja
+go nie używa. Jeśli chcesz posprzątać, zrób to **ręcznie, raz**:
 
-Bez tego kroku `supabase-js` zwróci `404` / `PGRST106`, bo PostgREST nie widzi schematu.
-Gdyby zakładka kiedyś zniknęła, to samo ustawia się SQL-em:
+**1. Usuń schemat** — Dashboard → **SQL Editor** → *New query* → wklej i **Run**:
 
 ```sql
-alter role authenticator set pgrst.db_schemas = 'public, graphql_public, wyceniacz';
-notify pgrst, 'reload config';
+drop schema if exists wyceniacz cascade;
 ```
 
-### 3. Sprawdź dane połączenia
+`cascade` usunie tabele, funkcje i trigger. **Nie dotyka** `public.meetings` ani niczego
+innego w projekcie. Tabele znikną też automatycznie z publikacji Realtime.
+Operacja jest **nieodwracalna**.
 
-[`config.js`](config.js) zawiera URL projektu i **publishable** key. Ten klucz jest z założenia
-publiczny — uprawnienia pilnuje baza. Nigdy nie wklejaj tam klucza `secret` / `service_role`.
+**2. Usuń schemat z API** — Dashboard → **Project Settings → API → Exposed schemas** →
+usuń `wyceniacz` i zapisz.
+
+Po tych krokach aplikacja działa dalej bez żadnych zmian — nie potrzebuje bazy.
 
 ---
 
@@ -92,6 +111,11 @@ npx serve .
 ```
 
 I wejdź na <http://localhost:8000>.
+
+> Dwie karty otwarte pod **tym samym adresem** dzielą `localStorage`, więc są tą samą
+> osobą (jeden głos). Aby zasymulować dwie osoby, otwórz apkę pod dwoma różnymi
+> adresami, np. `http://localhost:8000` i `http://127.0.0.1:8000` — to różne originy,
+> więc różne tożsamości.
 
 ---
 
@@ -113,32 +137,25 @@ Apka nie ma builda, więc workflow po prostu publikuje pliki z repo.
 - adres apki: `https://<user>.github.io/Wyceniacz/`,
 - adres pojawia się też w logu joba `Publikacja` (`page_url`).
 
-> Artefakt bierze całe repo (poza `.git` i `.github`), więc w apce leży też
-> `README.md` i `sql/setup.sql`. Nie ma tam nic wrażliwego — klucz publishable
-> i tak musi być w `config.js`.
->
-> GitHub Pages z **prywatnego** repo wymaga płatnego planu. Przy publicznym repo adres jest
-> publiczny, więc i publishable key jest publiczny — dlatego limity po stronie bazy
-> (poniżej) są ważne.
+> Artefakt bierze całe repo (poza `.git` i `.github`), więc w apce leżą też
+> `README.md` i `AGENTS.md`. Nie ma tam nic wrażliwego — klucz publishable i tak
+> musi być w `config.js`.
 
 ---
 
 ## Bezpieczeństwo i limity
 
-Klucz publishable jest publiczny, więc baza sama się broni:
+Skoro nic nie jest zapisywane, nie ma czego zapełnić ani wyciec z bazy:
 
-- `anon` może **tylko czytać**. Nie da się `INSERT`/`UPDATE`/`DELETE` przez REST.
-- Wszystkie zapisy przechodzą przez RPC, które walidują dane wejściowe:
-  - zakres wartości `1 – 15`,
-  - sekcja wyłącznie `be` / `fe` / `qa`,
-  - **maksymalnie 10 głosów na sekcję** w jednym głosowaniu,
-  - link do Jiry ucinany do 500 znaków.
-- Historia jest przycinana do 100 głosowań, a głosowania ujawnione bez głosów są usuwane.
-  Cała baza zatem nigdy nie przekroczy kilku MB.
-- Dane są beznazwowe i bezużyteczne — same liczby.
-
-Projekt działa na darmowym planie Supabase, gdzie przekroczenie limitów skutkuje
-ograniczeniem projektu, a nie fakturą.
+- **Żaden request nie idzie do bazy danych.** Cała komunikacja to kanał Realtime —
+  głosy są przesyłane na żywo i nigdzie nie są przechowywane.
+- **Nie ma limitów głosów na sekcję**, bo nie istnieje żaden trwały zbiór, który
+  można by nimi chronić.
+- **Kanał jest publiczny dla posiadaczy klucza projektu.** Osoba, która ma adres apki
+  i klucz publishable, mogłaby teoretycznie podłączyć się do kanału i podejrzeć głosy
+  w locie. Znika to w momencie zamknięcia strony, a dane są beznazwowe — same liczby.
+- Aplikacja działa na darmowym planie Supabase, gdzie przekroczenie limitów skutkuje
+  ograniczeniem projektu, a nie fakturą.
 
 ---
 
@@ -147,9 +164,8 @@ ograniczeniem projektu, a nie fakturą.
 ```
 index.html                      szkielet strony
 styles.css                      style
-config.js                       URL + publishable key + nazwa schematu
-app.js                          cała logika (realtime, render, akcje)
-sql/setup.sql                   konfiguracja bazy (do wklejenia w SQL Editor)
+config.js                       URL projektu + publishable key
+app.js                          cała logika (kanał, render, akcje, pamięć lokalna)
 .github/workflows/deploy.yml    automatyczny deploy na GitHub Pages
 README.md                       ten plik — użytkowanie i wdrożenie
 AGENTS.md                       dokumentacja techniczna dla pracujących nad kodem
@@ -161,8 +177,9 @@ AGENTS.md                       dokumentacja techniczna dla pracujących nad kod
 
 | Objaw | Przyczyna |
 | --- | --- |
-| `404` / `PGRST106` przy starcie | brak `wyceniacz` w **Exposed schemas** |
-| `Could not find the table` | nie uruchomiono `sql/setup.sql` |
-| Zmiany nie pojawiają się na żywo | tabele nie są w publikacji `supabase_realtime` |
-| `Limit 10 glosow w tej sekcji` | twardy limit bezpieczeństwa — zresetuj głosowanie |
+| „Brak połączenia na żywo" na czerwono | brak sieci albo zły URL/klucz w `config.js`; apka ponawia próbę w tle |
+| Licznik „Online" pokazuje kogoś, kogo już nie ma | karta została zamknięta bez czystego rozłączenia; licznik sam się poprawi po chwili |
+| Głosy zniknęły, gdy wszyscy wyszli | tak działa ten model — nic nie jest zapisywane trwale |
+| Rano strona startuje pusta | minęła północ, głosowanie obowiązuje w ramach jednego dnia |
 | „Głosowanie jest już odkryte" | po odkryciu głosy są zablokowane; kliknij Resetuj |
+| Zmiany nie pojawiają się na żywo | druga karta jest pod tym samym adresem i tą samą tożsamością |
