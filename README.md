@@ -19,7 +19,7 @@ Komputer-first, vanilla JS, bez builda.
 - Każdy głos leci od razu przez kanał Realtime do pozostałych otwartych przeglądarek.
 - **Przed** kliknięciem „Odkryj" widać tylko liczbę oddanych głosów w sekcji — nie widać
   ani czyichś wartości, ani tego, ile osób *powinno* zagłosować.
-- **Odkryj** (może kliknąć każdy) pokazuje listę głosów, średnie i sumę.
+- **Odkryj** (może kliknąć każdy) pokazuje listę głosów, wyniki i sumę.
 - **Resetuj** (może kliknąć każdy) czyści głosy i link, i startuje nowe głosowanie.
   **Potwierdzenia wymaga tylko przed odkryciem** — pierwszy klik zmienia napis na
   „Potwierdź reset". Po odkryciu wartości są już widoczne dla wszystkich, więc reset
@@ -55,8 +55,8 @@ się nim z pozostałymi. Dlatego:
 | Skala przycisków | `1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6` — po dwa w rzędzie, obok „6" pole własnej wartości |
 | Pole własnej wartości | dowolna liczba z zakresu `1 – 15`, zapis z dokładnością do 2 miejsc |
 | Cofanie głosu | kliknięcie własnego, aktywnego przycisku drugi raz (albo wyczyszczenie pola) |
-| Średnia sekcji | średnia głosów zaokrąglona **w górę** do wielokrotności `0.5` (ceiling) |
-| Sekcja bez głosów | lista `–`, średnia `–`, do sumy wchodzi jako `0` |
+| Wynik sekcji | średnia głosów zaokrąglona **w górę** do wielokrotności `0.5` (ceiling) |
+| Sekcja bez głosów | lista `–`, wynik `–`, do sumy wchodzi jako `0` |
 | Suma | suma trzech zaokrąglonych średnich (BE + FE + Testy) |
 | Tożsamość głosującego | losowy UUID w `localStorage` — jeden głos na sekcję na przeglądarkę |
 | Historia | **nie istnieje** — nic nie jest zapisywane |

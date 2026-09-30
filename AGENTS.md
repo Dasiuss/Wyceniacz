@@ -245,7 +245,7 @@ state = {
 ```
 
 `refs` trzyma referencje do elementów DOM per sekcja:
-`{ buttons, input, errEl, votesOut, avgOut, avgLabel, avgValue }`.
+`{ buttons, input, errEl, votesOut, votesValueEl, avgOut, avgLabel, avgValue }`.
 
 ### Kolejność uruchomienia
 
@@ -304,6 +304,9 @@ mogła przez błąd reprezentacji zmiennoprzecinkowej wyskoczyć jako `3.0`. Jes
 bo wartości mają maksymalnie 2 miejsca po przecinku — średnia różniąca się od wielokrotności
 0.5 o mniej niż 1e-9 po prostu nie może istnieć.
 
+Dlatego w interfejsie etykieta mówi **„Wynik"**, a nie „Średnia" — pokazywana liczba nie
+jest średnią, tylko średnią podniesioną w górę. Nie zmieniaj tej etykiety z powrotem.
+
 ### Suma
 
 Suma **trzech zaokrąglonych średnich**, nie surowych. Sekcja bez głosów wchodzi jako `0`.
@@ -322,8 +325,8 @@ Reguła: `n === 1` → „głos"; końcówka 2–4 poza 12–14 → „głosy"; 
 
 | Stan | Co widać w sekcji |
 | --- | --- |
-| `open` | Tylko liczba oddanych głosów. **Bez** wartości, średniej i sumy |
-| `revealed` | Lista głosów rosnąco (z przecinkami), pod nią średnia, w panelu suma |
+| `open` | Tylko liczba oddanych głosów (etykieta „Głosy" jest ukryta). **Bez** wartości, wyniku i sumy |
+| `revealed` | Etykieta „Głosy" i lista głosów rosnąco (z przecinkami), pod nią wynik, w panelu suma |
 
 Ukrywanie wartości przed odkryciem jest sensem całej apki — chodzi o to, żeby nikt nie
 sugerował się cudzymi liczbami.
@@ -386,6 +389,7 @@ i kliknięcie przycisku **cofało** głos zamiast go wybierać.
 | Element | Odcień | Kolor |
 | --- | --- | --- |
 | „Odkryj" (akcent) | 26° | `#b45309` ochra |
+| Suma końcowa (panel) | 26° | `#b45309` ochra — celowo ten sam akcent co „Odkryj" |
 | Reset (danger) | ~6° | `#c0392b` |
 | Testy | 175° | `#0d9488` morski |
 | Backend | 221° | `#2563eb` niebieski |
@@ -401,7 +405,7 @@ muszą być rozłożone poza nią.
 ```
 
 Wszystko w kolumnie bierze kolor z `--sec`: pasek u góry, kropka przy nazwie, hover
-przycisków, aktywny przycisk, ramka i tekst aktywnego pola oraz średnia.
+przycisków, aktywny przycisk, ramka i tekst aktywnego pola oraz wynik.
 
 **Przy zmianie sprawdź trzy rzeczy:**
 

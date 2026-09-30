@@ -512,6 +512,16 @@ function buildUI() {
     const votesOut = document.createElement('div');
     votesOut.className = 'votes';
 
+    // Nazwy z "El", zeby nie przeslonic funkcji votesLabel(n) - to dwie rozne rzeczy.
+    const votesLabelEl = document.createElement('span');
+    votesLabelEl.className = 'votes-label';
+    votesLabelEl.textContent = 'Głosy';
+
+    const votesValueEl = document.createElement('span');
+    votesValueEl.className = 'votes-value';
+
+    votesOut.append(votesLabelEl, votesValueEl);
+
     const avgOut = document.createElement('div');
     avgOut.className = 'avg';
 
@@ -529,7 +539,7 @@ function buildUI() {
 
     sectionsEl.appendChild(col);
 
-    refs[s.key] = { buttons, input, errEl, votesOut, avgOut, avgLabel, avgValue };
+    refs[s.key] = { buttons, input, errEl, votesOut, votesValueEl, avgOut, avgLabel, avgValue };
   }
 }
 
@@ -617,14 +627,16 @@ function renderSections() {
     renderSelection(s.key);
 
     if (revealed) {
-      r.votesOut.textContent = stats.count ? stats.values.map(fmt).join(', ') : '–';
+      r.votesValueEl.textContent = stats.count ? stats.values.map(fmt).join(', ') : '–';
       r.votesOut.classList.add('revealed');
 
-      r.avgLabel.textContent = 'Średnia';
+      // "Wynik", nie "Średnia": pokazywana liczba to srednia podniesiona w gore do
+      // wielokrotnosci 0.5, wiec nazywanie jej srednia wprowadzalo w blad.
+      r.avgLabel.textContent = 'Wynik';
       r.avgValue.textContent = stats.avg === null ? '–' : `${fmt(stats.avg)} MD`;
       r.avgOut.classList.add('on');
     } else {
-      r.votesOut.textContent = votesLabel(stats.count);
+      r.votesValueEl.textContent = votesLabel(stats.count);
       r.votesOut.classList.remove('revealed');
 
       r.avgLabel.textContent = '';

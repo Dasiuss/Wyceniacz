@@ -331,13 +331,35 @@ main {
 }
 
 .result .votes {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* Etykieta rezerwuje miejsce takze przed odkryciem (opacity, nie display),
+   zeby blok wyniku nie skakal w gore przy zmianie stanu. */
+.votes-label {
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.result .votes.revealed .votes-label {
+  opacity: 1;
+}
+
+.result .votes-value {
   color: var(--muted);
   font-size: 13.5px;
   font-weight: 600;
   overflow-wrap: anywhere;
 }
 
-.result .votes.revealed {
+.result .votes.revealed .votes-value {
   color: var(--text);
   font-size: 15px;
   font-variant-numeric: tabular-nums;
@@ -557,11 +579,11 @@ main {
 }
 
 .sum-value {
-  font-size: 32px;
+  font-size: 36px;
   font-weight: 700;
   letter-spacing: -0.025em;
   font-variant-numeric: tabular-nums;
-  color: var(--text);
+  color: var(--accent);
   line-height: 1.15;
 }
 
