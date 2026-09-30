@@ -6,6 +6,9 @@ rzeczywistym, bez logowania i bez imion. Zastępuje plugin do Jiry, który u nas
 
 Komputer-first, vanilla JS, bez builda. Stan trzyma Supabase (Postgres + Realtime + Presence).
 
+> **Pracujesz nad kodem?** Zobacz [`AGENTS.md`](AGENTS.md) — architektura, model danych,
+> reguły biznesowe, konwencje i pułapki. Ten plik jest dla użytkownika i wdrożenia.
+
 ---
 
 ## Jak to działa
@@ -142,11 +145,14 @@ ograniczeniem projektu, a nie fakturą.
 ## Struktura
 
 ```
-index.html      szkielet strony
-styles.css      style
-config.js       URL + publishable key + nazwa schematu
-app.js          cała logika (realtime, render, akcje)
-sql/setup.sql   konfiguracja bazy (do wklejenia w SQL Editor)
+index.html                      szkielet strony
+styles.css                      style
+config.js                       URL + publishable key + nazwa schematu
+app.js                          cała logika (realtime, render, akcje)
+sql/setup.sql                   konfiguracja bazy (do wklejenia w SQL Editor)
+.github/workflows/deploy.yml    automatyczny deploy na GitHub Pages
+README.md                       ten plik — użytkowanie i wdrożenie
+AGENTS.md                       dokumentacja techniczna dla pracujących nad kodem
 ```
 
 ---
