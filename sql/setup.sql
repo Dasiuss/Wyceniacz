@@ -47,8 +47,11 @@ create table if not exists wyceniacz.votes (
   unique (voting_id, voter_id, section)
 );
 
--- Zakres wycen to 1-15 MD. Alter naprawia rowniez baze postawiona wczesniejsza
--- wersja skryptu (ktora dopuszczala 0.5).
+-- Zakres wycen to 1-15 MD. Pierwsza wersja skryptu dopuszczala jeszcze 0.5, wiec
+-- zanim zalozymy nowe ograniczenie, usuwamy glosy spoza zakresu - inaczej ALTER
+-- TABLE zostanie odrzucony przez istniejace wiersze (blad 23514).
+delete from wyceniacz.votes where value < 1 or value > 15;
+
 alter table wyceniacz.votes drop constraint if exists votes_value_check;
 alter table wyceniacz.votes
   add constraint votes_value_check check (value >= 1 and value <= 15);
