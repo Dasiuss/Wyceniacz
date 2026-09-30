@@ -166,7 +166,7 @@ main {
 }
 
 .col[data-section="be"] { --sec: #2563eb; --sec-soft: #eef4ff; }
-.col[data-section="fe"] { --sec: #7c3aed; --sec-soft: #f5f0ff; }
+.col[data-section="fe"] { --sec: #db2777; --sec-soft: #fdf2f8; }
 .col[data-section="qa"] { --sec: #0d9488; --sec-soft: #e9faf7; }
 
 .col h2 {

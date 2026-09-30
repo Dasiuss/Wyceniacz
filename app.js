@@ -224,7 +224,7 @@ function buildUI() {
       const value = Number(raw.replace(',', '.'));
       if (!Number.isFinite(value) || value < MIN_VALUE || value > MAX_VALUE) {
         errEl.textContent = `Zakres: ${fmt(MIN_VALUE)}–${fmt(MAX_VALUE)} MD`;
-        input.classList.remove('active');
+        renderSelection(s.key);
         return;
       }
 
@@ -232,9 +232,11 @@ function buildUI() {
       castVote(s.key, round2(value), false);
     };
 
-    // Zaznaczamy pole od razu przy pierwszym znaku, nie dopiero po opuszczeniu.
+    // Pole reaguje juz na pierwszy znak i przejmuje zaznaczenie od przyciskow,
+    // zeby nie bylo watpliwosci, ktora wartosc sie liczy.
     input.addEventListener('input', () => {
-      input.classList.toggle('active', input.value.trim() !== '');
+      errEl.textContent = '';
+      renderSelection(s.key);
     });
 
     input.addEventListener('change', commit);
@@ -281,9 +283,41 @@ function renderOnline() {
   onlinePill.textContent = `Online: ${state.online}`;
 }
 
+// Ustala, co jest zaznaczone w danej sekcji. Pole z wpisana wartoscia ma
+// pierwszenstwo nad przyciskami: po wybraniu 3 i wpisaniu 9 nie moga swiecic
+// oba naraz, bo nie wiadomo, ktora wartosc sie liczy.
+function renderSelection(key) {
+  const r = refs[key];
+  if (!r) return;
+
+  const canVote = Boolean(state.voting) && state.voting.status === 'open';
+
+  const mine = myVote(key);
+  const mineValue = mine ? Number(mine.value) : null;
+  const mineIsCustom = mineValue !== null && !isPreset(mineValue);
+
+  // Wpisana, jeszcze niezatwierdzona wartosc tez jest biezacym wyborem.
+  const poleMaTresc = r.input.value.trim() !== '';
+
+  r.input.disabled = !canVote;
+  r.input.classList.toggle('active', poleMaTresc || mineIsCustom);
+  r.input.title = mineIsCustom ? 'Wyczyść pole, aby cofnąć głos' : '';
+
+  const zaznaczonyPreset = !poleMaTresc && mineValue !== null && isPreset(mineValue)
+    ? mineValue
+    : null;
+
+  for (const b of r.buttons) {
+    const v = Number(b.dataset.value);
+    const isMine = zaznaczonyPreset !== null && Math.abs(v - zaznaczonyPreset) < 1e-9;
+    b.classList.toggle('active', isMine);
+    b.disabled = !canVote;
+    b.title = isMine ? 'Kliknij ponownie, aby cofnąć głos' : '';
+  }
+}
+
 function renderSections() {
   const status = state.voting ? state.voting.status : null;
-  const canVote = status === 'open';
   const revealed = status === 'revealed';
 
   for (const s of SECTIONS) {
@@ -292,29 +326,15 @@ function renderSections() {
 
     const mine = myVote(s.key);
     const mineValue = mine ? Number(mine.value) : null;
-    const mineIsPreset = mineValue !== null && isPreset(mineValue);
 
-    for (const b of r.buttons) {
-      const v = Number(b.dataset.value);
-      const isMine = mineValue !== null && Math.abs(v - mineValue) < 1e-9;
-      b.classList.toggle('active', isMine);
-      b.disabled = !canVote;
-      b.title = isMine ? 'Kliknij ponownie, aby cofnąć głos' : '';
-    }
-
-    // Wlasna wartosc zaznaczamy tak samo wyraznie, jak zaznaczony przycisk.
-    const mineIsCustom = mineValue !== null && !mineIsPreset;
-    const pisze = document.activeElement === r.input;
-
-    r.input.disabled = !canVote;
-    r.input.title = mineIsCustom ? 'Wyczyść pole, aby cofnąć głos' : '';
-
-    // Podczas pisania polem rzadzi zdarzenie "input" - inaczej przerysowanie
-    // gasiłoby podświetlenie w połowie wpisywania.
-    if (!pisze) {
-      r.input.classList.toggle('active', mineIsCustom);
+    // W trakcie pisania nie nadpisujemy pola - inaczej przerysowanie zgubiloby
+    // wpisywana wartosc.
+    if (document.activeElement !== r.input) {
+      const mineIsCustom = mineValue !== null && !isPreset(mineValue);
       r.input.value = mineIsCustom ? fmt(mineValue) : '';
     }
+
+    renderSelection(s.key);
 
     if (revealed) {
       r.votesOut.textContent = stats.count ? stats.values.map(fmt).join(', ') : '–';
@@ -508,11 +528,18 @@ async function castVote(section, value, fromButton) {
     return;
   }
 
-  // Klikniecie w swoj wlasny, aktywny przycisk cofa glos.
-  const mine = myVote(section);
-  if (mine && Math.abs(Number(mine.value) - value) < 1e-9) {
-    await withdrawVote(section);
-    return;
+  // Klikniecie w przycisk, ktory jest widocznie zaznaczony, cofa glos.
+  // Patrzymy na stan interfejsu, a nie na baze: gdy w polu wpisano inna
+  // wartosc, przycisk nie jest zaznaczony, wiec klikniecie ma go wybrac,
+  // a nie cofac.
+  if (fromButton) {
+    const idx = PRESET_VALUES.indexOf(value);
+    const przycisk = idx >= 0 ? refs[section].buttons[idx] : null;
+
+    if (przycisk && przycisk.classList.contains('active')) {
+      await withdrawVote(section);
+      return;
+    }
   }
 
   try {
