@@ -1,0 +1,47 @@
+name: Deploy na GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Wymagane przez deploy-pages: zapis do Pages + token OIDC.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Jeden deploy naraz; nie przerywamy trwajacego publikowania.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Artefakt
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pobranie repo
+        uses: actions/checkout@v7
+
+      - name: Konfiguracja Pages
+        uses: actions/configure-pages@v6
+
+      # Apka nie ma builda - publikujemy pliki tak, jak leza w repo.
+      # Akcja sama wyklucza .git i .github.
+      - name: Zlozenie artefaktu
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: .
+
+  deploy:
+    name: Publikacja
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v5

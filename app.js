@@ -39,7 +39,12 @@ const fmt = (n) => {
   return String(Math.round(x * 100) / 100);
 };
 
-const ceilHalf = (n) => Math.ceil(n * 2) / 2;
+// Zaokraglenie w gore do wielokrotnosci 0.5 (ceiling), np. 3.1 -> 3.5.
+// Epsilon neutralizuje bledy reprezentacji zmiennoprzecinkowej: sumy glosow
+// maja maksymalnie 2 miejsca po przecinku, wiec srednia rozniona od
+// wielokrotnosci 0.5 o mniej niz 1e-9 po prostu nie istnieje i 1e-9 nie moze
+// zjesc prawdziwego zaokraglenia.
+const ceilHalf = (n) => Math.ceil(n * 2 - 1e-9) / 2;
 const round2 = (n) => Math.round(n * 100) / 100;
 const msg = (e) => (e && e.message ? e.message : String(e));
 
@@ -147,6 +152,7 @@ function buildUI() {
   for (const s of SECTIONS) {
     const col = document.createElement('section');
     col.className = 'col';
+    col.dataset.section = s.key;
 
     const title = document.createElement('h2');
     title.textContent = s.label;
@@ -224,13 +230,21 @@ function buildUI() {
     const avgOut = document.createElement('div');
     avgOut.className = 'avg';
 
+    const avgLabel = document.createElement('span');
+    avgLabel.className = 'avg-label';
+
+    const avgValue = document.createElement('span');
+    avgValue.className = 'avg-value';
+
+    avgOut.append(avgLabel, avgValue);
+
     result.appendChild(votesOut);
     result.appendChild(avgOut);
     col.appendChild(result);
 
     sectionsEl.appendChild(col);
 
-    refs[s.key] = { buttons, input, errEl, votesOut, avgOut };
+    refs[s.key] = { buttons, input, errEl, votesOut, avgOut, avgLabel, avgValue };
   }
 }
 
@@ -270,13 +284,17 @@ function renderSections() {
     if (revealed) {
       r.votesOut.textContent = stats.count ? stats.values.map(fmt).join(', ') : '–';
       r.votesOut.classList.add('revealed');
-      r.avgOut.textContent = stats.avg === null
-        ? 'Średnia: –'
-        : `Średnia: ${fmt(stats.avg)} MD`;
+
+      r.avgLabel.textContent = 'Średnia';
+      r.avgValue.textContent = stats.avg === null ? '–' : `${fmt(stats.avg)} MD`;
+      r.avgOut.classList.add('on');
     } else {
       r.votesOut.textContent = `Zagłosowano: ${stats.count}`;
       r.votesOut.classList.remove('revealed');
-      r.avgOut.textContent = '';
+
+      r.avgLabel.textContent = '';
+      r.avgValue.textContent = '';
+      r.avgOut.classList.remove('on');
     }
   }
 }

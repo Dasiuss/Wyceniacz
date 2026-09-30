@@ -90,12 +90,26 @@ I wejdź na <http://localhost:8000>.
 
 ## Wdrożenie na GitHub Pages
 
-Repo nie ma builda, więc wystarczy gałąź:
+Deploy jest w pełni automatyczny — plik [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml).
+Apka nie ma builda, więc workflow po prostu publikuje pliki z repo.
 
-1. **Settings → Pages → Source: Deploy from a branch → `main` / `root`** → Save.
-2. Po chwili apka będzie pod `https://<user>.github.io/Wyceniacz/`.
-3. Zmiana czegokolwiek = commit + push; Pages przebuduje się sam.
+**Jednorazowa konfiguracja:**
 
+1. **Settings → Pages → Source: `GitHub Actions`** → Save.
+   *(Bez tego `deploy-pages` padnie z błędem „Pages not enabled".)*
+2. Wypchnij cokolwiek na `main` albo odpal workflow ręcznie:
+   **Actions → Deploy na GitHub Pages → Run workflow**.
+
+**Co się dzieje dalej:**
+
+- każdy `push` na `main` → nowy deploy,
+- adres apki: `https://<user>.github.io/Wyceniacz/`,
+- adres pojawia się też w logu joba `Publikacja` (`page_url`).
+
+> Artefakt bierze całe repo (poza `.git` i `.github`), więc w apce leży też
+> `README.md` i `sql/setup.sql`. Nie ma tam nic wrażliwego — klucz publishable
+> i tak musi być w `config.js`.
+>
 > GitHub Pages z **prywatnego** repo wymaga płatnego planu. Przy publicznym repo adres jest
 > publiczny, więc i publishable key jest publiczny — dlatego limity po stronie bazy
 > (poniżej) są ważne.
